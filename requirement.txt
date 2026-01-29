@@ -1,0 +1,7 @@
+openai
+requests
+schedule
+
+streamlit
+chromadb
+pandas
