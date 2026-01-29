@@ -121,15 +121,14 @@ def get_new_headlines():
     
     return chain.invoke({"events": "\n".join(all_headlines)})
 
-# --- SIDE BAR ---
-st.sidebar.header("Controls")
-run_now = st.sidebar.button("Run Logistics Check")
+# --- BUTTON ---
+run_now = st.button("Run Logistics Check")
 
 # --- MAIN UI ---
 if run_now:
     with st.spinner("Fetching active disruptions..."):
         report = get_new_headlines()
-        st.subheader("📊 Active Logistics Disruption Report")
+        st.subheader("Active Logistics Disruption Report")
         if report:
             # Simple color-coded severity highlighting
             for block in report.split("\n\n"):
