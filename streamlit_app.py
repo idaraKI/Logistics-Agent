@@ -62,7 +62,6 @@ with st.sidebar:
         selected_date = st.date_input(
             "Check events as of",
             value=today,
-            max_value=today,                    # cannot select future
             help="News will be fetched from this date backwards"
         )
         from_date_str = selected_date.strftime("%Y-%m-%d")
@@ -72,7 +71,6 @@ with st.sidebar:
             "Date range",
             value=(default_start, today),
             min_value=default_start - timedelta(days=30),
-            max_value=today,
             help="Fetch events in this period"
         )
         if len(date_range) == 2:
@@ -90,51 +88,57 @@ st.title("Logistics Risk Agent")
 st.caption("Logistics Disruption Monitor")
 
 # ---  MODELS ---
-LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM_GATHER = ChatOpenAI(model="gpt-4o", temperature=0)
+LLM_SUMMARIZE = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 # --- PROMPTS ---
-prompt = PromptTemplate.from_template(
+gather_prompt = PromptTemplate.from_template(
     """
-You are a logistics analyst for {country_name}.
-
+You are a strict logistics risk filter for {country_name}.
 Time period: {date_display}
 
-Analyze the following events/news items.
+Read the following events and return ONLY the items that are
+HIGH severity and are actively disrupting or will very soon disrupt
+logistics (delivery, transport, ports, customs, warehouses, strikes, blockades).
 
-Report **only** the items that have a realistic current or near-term impact on:
-- package / freight delivery
-- road / port / airport / rail transport
-- customs clearance
-- warehousing
-- strikes / protests / blockades affecting logistics
-
-Ignore:
-- pure political news without transport impact
-- weather / accidents without confirmed logistics effect
-- very old events without ongoing consequences
-- general news not related to freight movement
-
-For each relevant event:
-- Severity: LOW, MEDIUM, HIGH
-- Short description of impact on logistics
-
-Also mention any public holidays or closures that could affect operations.
+Rules:
+- ONLY return HIGH severity items
+- Format each as one line: HIGH | short event description | brief logistics impact
+- If no HIGH severity events exist → return exactly this line and nothing else:
+  NO_HIGH_RISK_EVENTS
+- Do NOT include LOW or MEDIUM severity
+- Do NOT add explanations or extra text
 
 Events:
 {events}
-
-Format:
-Disruption:
-Severity:
-Impact:
-
-Holiday / Closure Note (if applicable):
 """
 )
 
-chain = prompt | LLM | StrOutputParser()
+gather_chain = gather_prompt | LLM_GATHER | StrOutputParser()
+
+prompt = PromptTemplate.from_template(
+    """
+You are a concise logistics alert writer.
+
+Input is a list of HIGH severity events.
+
+Turn them into a very short alert (2 sentences maximum). Be direct,urgent, and factual
+
+If input is "NO_HIGH_RISK_EVENTS" → return exactly:
+No high-risk logistics disruptions detected in {date_display}.
+
+
+Input:
+{filtered_events}
+
+Country: {country_name}
+Time period: {date_display}
+"""
+)
+
+summary_chain = prompt | LLM_SUMMARIZE | StrOutputParser()
 
 # --- FIRST DATA SOURCE ---
 NEWSDATA_URL = "https://newsdata.io/api/1/news"
@@ -174,7 +178,7 @@ def fetch_tavily():
         st.error(f"Tavily fetch failed: {e}")
         return []
 
-# --- MAIN UI ---
+# --- MAIN UI --#  
 if st.button("Run Logistics Check", type="primary"):
     with st.spinner(f"Scanning {country_name} for {date_display}..."):
         # Fetch data
@@ -188,20 +192,27 @@ if st.button("Run Logistics Check", type="primary"):
             st.info("No events found in the selected period from either source.")
         else:
             try:
-                report = chain.invoke({
+                filtered = gather_chain.invoke({
                     "events": "\n\n".join(all_items),
                     "country_name": country_name,
                     "date_display": date_display
                 })
 
-                st.subheader("Logistics Disruption & Holiday Report")
+                if filtered.strip().upper() == "NO_HIGH_RISK_EVENTS":
+                    st.info("No high-risk logistics disruptions detected.")
+                else:
+                    # Step 2: Summarize to 2–3 lines
+                    short_summary = summary_chain.invoke({
+                        "filtered_events": filtered,
+                        "date_display": date_display,
+                        "country_name": country_name
+                    })
 
-                st.markdown(report)
+                    st.subheader("High-Risk Alert")
+                    st.markdown(short_summary.strip())
 
-                st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S WAT')}")
             except Exception as e:
                 st.error(f"Report generation failed: {str(e)}")
-
 
             
            
