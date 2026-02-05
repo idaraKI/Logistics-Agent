@@ -101,7 +101,7 @@ Time period: {date_display}
 
 Read the following events and return ONLY the items that are
 HIGH severity and are actively disrupting or will very soon disrupt
-logistics (delivery, transport, ports, customs, warehouses, strikes, blockades).
+logistics (delivery, transport, ports, customs, warehouses, strikes, blockades, holidays, christmas).
 
 Rules:
 - ONLY return HIGH severity items
