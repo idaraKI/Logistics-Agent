@@ -99,17 +99,17 @@ gather_prompt = PromptTemplate.from_template(
 You are a strict logistics risk filter for {country_name}.
 Time period: {date_display}
 
-Read the following events and return ONLY the items that are
-HIGH severity and are actively disrupting or will very soon disrupt
-logistics (delivery, transport, ports, customs, warehouses, strikes, blockades, holidays, christmas).
+First: identify if the period includes any major public holiday in {country_name}
+that causes significant logistics impact (closed ports/customs/warehouses, reduced transport).
 
-Rules:
-- ONLY return HIGH severity items
-- Format each as one line: HIGH | short event description | brief logistics impact
-- If no HIGH severity events exist → return exactly this line and nothing else:
-  NO_HIGH_RISK_EVENTS
-- Do NOT include LOW or MEDIUM severity
-- Do NOT add explanations or extra text
+Then filter events.
+
+Return ONLY:
+- HIGH severity disruptions: HIGH | short description | logistics impact
+- If relevant: Holiday Impact: [holiday name] - brief logistics effect (only if HIGH risk)
+
+If nothing qualifies as HIGH risk → return exactly:
+NO_HIGH_RISK_EVENTS
 
 Events:
 {events}
@@ -199,7 +199,7 @@ if st.button("Run Logistics Check", type="primary"):
                 })
 
                 if filtered.strip().upper() == "NO_HIGH_RISK_EVENTS":
-                    st.info("No high-risk logistics disruptions detected.")
+                    st.info("No high-risk logistics disruptions or major holiday impact detected.")
                 else:
                     # Step 2: Summarize to 2–3 lines
                     short_summary = summary_chain.invoke({
