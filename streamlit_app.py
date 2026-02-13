@@ -99,25 +99,28 @@ st.title("Logistics Risk Agent")
 st.caption("Logistics Disruption Monitor")
 
 # ---  MODELS ---
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 HOLIDAY_LLM = ChatOpenAI(
     model="anthropic/claude-3.5-sonnet",
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
+    api_key=OPENROUTER_API_KEY
 )
+print("API Key:", os.getenv("OPENROUTER_API_KEY"))
+
 
 DISASTER_LLM = ChatOpenAI(
     model="google/gemini-2.0-flash-001",
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
+    api_key=OPENROUTER_API_KEY
 )
 
 SUMMARY_LLM = ChatOpenAI(
     model="openai/gpt-4o-mini",
     temperature=0.2,
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
+    api_key=OPENROUTER_API_KEY
 )
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
