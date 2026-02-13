@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import requests
+import httpx
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
@@ -104,8 +105,7 @@ HOLIDAY_LLM = ChatOpenAI(
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
-    default_request_timeout=60,
-    max_retries=2
+    client=httpx.Client(timeout=60.0)
 )
 
 DISASTER_LLM = ChatOpenAI(
@@ -113,15 +113,15 @@ DISASTER_LLM = ChatOpenAI(
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
-    default_request_timeout=60,
-    max_retries=2
+    client=httpx.Client(timeout=60.0)
 )
 
 SUMMARY_LLM = ChatOpenAI(
     model="openai/gpt-4o-mini",
     temperature=0.2,
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    client=httpx.Client(timeout=60.0)
 )
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -225,7 +225,7 @@ def fetch_tavily():
     try:
         query = f"{country_name} disruption transport delay customs port strike holiday closure since:{from_date_str}"
         result = tavily.search(
-            query =query,
+            query=query,
             search_depth="advanced",
             max_results=10
         )
@@ -292,13 +292,7 @@ if st.button("Run Logistics Check", type="primary",):
 
         st.subheader("ALERT")
         st.markdown(summary_output.strip())
-    #             summary_output = f"""
-    # {holiday_output.strip()}
-
-    # {disaster_output.strip()}
-    # """
-    #             st.subheader("Alert")
-    #             st.markdown(summary_output.strip())
+   
            
 
         

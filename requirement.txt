@@ -1,9 +1,0 @@
-openai
-requests
-schedule
-python-dotenv
-langchain
-langchain-openai
-langchain-core
-tavily-python
-streamlit

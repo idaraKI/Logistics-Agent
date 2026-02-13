@@ -14,42 +14,75 @@ load_dotenv()
 
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-COUNTRY = "za"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # --- KEEPS TRACKS OF NEWS ALREADY SEEN ---
 seen_titles = set()
 
 # ---  MODELS ---
-LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM_GATHER = ChatOpenAI(
+    model="openai/gpt-4o",
+    temperature=0,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY
+)
+
+LLM_SUMMARIZE = ChatOpenAI(
+    model="openai/gpt-4o-mini",
+    temperature=0.2,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY
+)
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 # --- PROMPTS ---
-prompt = PromptTemplate(
-    input_variables=["events"],
-    template="""
-You are a logistics analyst for South Africa.
+gather_prompt = PromptTemplate.from_template(
+    """
+You are a strict logistics risk analyst for {country_name}.
+Time period: {date_display}
 
-Analyze the following events and report ONLY those that are actively happening RIGHT NOW
-and are currently disrupting package delivery or transport.
+First: identify if the period includes any major public holiday in {country_name}
+that causes significant logistics impact (closed ports/customs/warehouses, reduced transport).
 
-For each event:
-- Assign severity: LOW, MEDIUM, HIGH
-- Describe the actual impact on package delivery
-- Ignore events that are potential, past, or irrelevant
+Then filter events.
+
+Return ONLY:
+- HIGH severity disruptions: HIGH | short description | logistics impact
+- If relevant: Holiday Impact: [holiday name] - brief logistics effect (only if HIGH risk)
+
+If nothing qualifies as HIGH risk → return exactly:
+NO_HIGH_RISK_EVENTS
 
 Events:
 {events}
-
-Format:
-Event:
-Severity:
-Impact on package delivery:
 """
 )
 
-chain = prompt | LLM | StrOutputParser()
+gather_chain = gather_prompt | LLM_GATHER | StrOutputParser()
+
+# --- SUMMARY PROMPT ---
+summary_prompt = PromptTemplate.from_template(
+    """
+You are a concise logistics alert writer.
+
+Input is a list of confirmed HIGH severity disruptions and/or major holiday impacts.
+
+Turn them into a very short alert summary (2–3 sentences maximum).
+Be direct, urgent, and factual.
+
+If input is "NO_HIGH_RISK_EVENTS" → return exactly:
+No high-risk logistics disruptions or major holiday impacts detected in {date_display}.
+
+Input:
+{filtered_events}
+
+Country: {country_name}
+Time period: {date_display}
+"""
+)
+
+summary_chain = summary_prompt | LLM_SUMMARIZE | StrOutputParser()
 
 # --- FIRST DATA SOURCE ---
 NEWSDATA_URL = "https://newsdata.io/api/1/news"
