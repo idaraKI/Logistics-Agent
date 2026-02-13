@@ -13,7 +13,7 @@ if os.path.exists(".env"):
 
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # --- STREAMLIT CONFIGURATON ---
 st.set_page_config( 
@@ -54,9 +54,8 @@ with st.sidebar:
         horizontal=True,
         index=0
     )
-    
+
     today = datetime.today().date()
-    default_start = today - timedelta(days=7)   # last week by default
     
     if date_mode == "Single date":
         selected_date = st.date_input(
@@ -66,79 +65,131 @@ with st.sidebar:
         )
         from_date_str = selected_date.strftime("%Y-%m-%d")
         date_display = selected_date.strftime("%B %d, %Y")
+        
     else:
+        default_start = today - timedelta(days=7)
         date_range = st.date_input(
-            "Date range",
-            value=(default_start, today),
-            min_value=default_start - timedelta(days=30),
-            help="Fetch events in this period"
+            "Date range (max 7 days)",
+            value=(today, today),
+            #min_value=today - timedelta(days=800),
+            max_value=today + timedelta(days=800),
+            help="You can select up to 7 days at a time"
         )
         if len(date_range) == 2:
             start_date, end_date = date_range
+            # Enforce max 7-day span
+            if (end_date - start_date).days > 7:
+                st.warning("Maximum range is 7 days.")
+                end_date = start_date + timedelta(days=6)
+                # Force widget update (Streamlit limitation workaround)
+                st.session_state["date_range"] = (start_date, end_date)
+                st.rerun()
+
             from_date_str = start_date.strftime("%Y-%m-%d")
-            date_display = f"{start_date.strftime('%B %d, %Y')} –{end_date.strftime('%B %d, %Y')}"
+            date_display = f"{start_date.strftime('%B %d, %Y')} – {end_date.strftime('%B %d, %Y')}"
+            
         else:
-            # Incomplete range – fallback to single today
+            # Incomplete selection → fallback to today
             from_date_str = today.strftime("%Y-%m-%d")
             date_display = today.strftime("%B %d, %Y")
-    
+           
     st.caption(f"Period: {date_display}")
 
 st.title("Logistics Risk Agent")
 st.caption("Logistics Disruption Monitor")
 
 # ---  MODELS ---
-LLM_GATHER = ChatOpenAI(model="gpt-4o", temperature=0)
-LLM_SUMMARIZE = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+HOLIDAY_LLM = ChatOpenAI(
+    model="anthropic/claude-3.5-sonnet",
+    temperature=0,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY")
+)
+
+DISASTER_LLM = ChatOpenAI(
+    model="google/gemini-2.0-flash-001",
+    temperature=0,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY")
+)
+
+SUMMARY_LLM = ChatOpenAI(
+    model="openai/gpt-4o-mini",
+    temperature=0.2,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY")
+)
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 # --- PROMPTS ---
-gather_prompt = PromptTemplate.from_template(
+holiday_prompt = PromptTemplate.from_template(
     """
-You are a strict logistics risk filter for {country_name}.
-Time period: {date_display}
+You are a global public holiday database.
 
-First: identify if the period includes any major public holiday in {country_name}
-that causes significant logistics impact (closed ports/customs/warehouses, reduced transport).
+For {country_name} ({country_code})
+and date range {date_start} to {date_end},
 
-Then filter events.
+Return ONLY a list of official public holidays in this exact format:
+YYYY-MM-DD|\n Holiday Name 
 
-Return ONLY:
-- HIGH severity disruptions: HIGH | short description | logistics impact
-- If relevant: Holiday Impact: [holiday name] - brief logistics effect (only if HIGH risk)
+If no holidays in the period → return exactly one line:
+NO_PUBLIC_HOLIDAYS
 
-If nothing qualifies as HIGH risk → return exactly:
-NO_HIGH_RISK_EVENTS
+Do NOT add explanations, do NOT guess dates.
 
-Events:
+Period: {date_start} to {date_end}
+"""
+)
+
+holiday_chain = holiday_prompt | HOLIDAY_LLM | StrOutputParser()
+
+disaster_prompt = PromptTemplate.from_template(
+    """
+You are an early-warning disaster & event monitor.
+
+Read the following news/social/web items from {country_name}
+in period {date_display}.
+
+Return ONLY events that are:
+- natural disasters (flood, storm, earthquake, wildfire, etc.)
+- major transport disruptions (port closure, strike, border issue, etc.)
+- other high-impact events (protests, accidents, supply chain crisis)
+
+Format each as :
+EVENT_TYPE |\n short description |\n current impact level (HIGH/MEDIUM/LOW) | source snippet
+
+If no relevant events → return exactly:
+NO_DISASTER_OR_MAJOR_EVENTS
+
+Items:
 {events}
 """
 )
 
-gather_chain = gather_prompt | LLM_GATHER | StrOutputParser()
+disaster_chain = disaster_prompt | DISASTER_LLM | StrOutputParser()
 
-prompt = PromptTemplate.from_template(
+summary_prompt = PromptTemplate.from_template(
     """
 You are a concise logistics alert writer.
 
-Input is a list of HIGH severity events.
+Input contains filtered  events, disasters, and/or holiday.
 
-Turn them into a very short alert (2 sentences maximum). Be direct,urgent, and factual
 
-If input is "NO_HIGH_RISK_EVENTS" → return exactly:
-No high-risk logistics disruptions detected in {date_display}.
+Turn them into a very short alert (2 sentences maximum).
+Be direct, urgent, and factual.
 
 
 Input:
-{filtered_events}
+{holiday_output}
+{disaster_output}
 
 Country: {country_name}
 Time period: {date_display}
 """
 )
 
-summary_chain = prompt | LLM_SUMMARIZE | StrOutputParser()
+summary_chain = summary_prompt | SUMMARY_LLM | StrOutputParser()
 
 # --- FIRST DATA SOURCE ---
 NEWSDATA_URL = "https://newsdata.io/api/1/news"
@@ -178,42 +229,79 @@ def fetch_tavily():
         st.error(f"Tavily fetch failed: {e}")
         return []
 
+
+
+
 # --- MAIN UI --#  
-if st.button("Run Logistics Check", type="primary"):
+if st.button("Run Logistics Check", type="primary",):
     with st.spinner(f"Scanning {country_name} for {date_display}..."):
-        # Fetch data
-        news_items = fetch_newsdata()
-        tavily_items = fetch_tavily()
 
-        # --- COMBINE AND REMOVE DUPLICATES —--
-        all_items = news_items + tavily_items
+        today = datetime.today().date()
 
-        if not all_items:
-            st.info("No events found in the selected period from either source.")
+        # ----- DETERMINE PERIOD TYPE -----
+        if date_mode == "Single date":
+            period_type = "future" if selected_date > today else "past_or_present"
         else:
-            try:
-                filtered = gather_chain.invoke({
+            period_type = "future" if start_date > today else "past_or_present"
+
+        
+
+        # --- ALWAYS RUN HOLIDAY LLM ---
+        holiday_output = holiday_chain.invoke({
+            "country_name": country_name,
+            "country_code": country_code.upper(),
+            "date_start": from_date_str,
+            "date_end": date_display.split(" – ")[-1].strip()
+            if " – " in date_display else from_date_str
+        })
+
+        # 2️⃣ FUTURE → Only holidays
+        if period_type == "future":
+            disaster_output = "NO_DISASTER_OR_MAJOR_EVENTS"
+        else:
+
+        # Fetch data
+            news_items = fetch_newsdata()
+            tavily_items = fetch_tavily()
+
+            # --- COMBINE AND REMOVE DUPLICATES —--
+            all_items = news_items + tavily_items
+
+            if not all_items:
+                disaster_output = "NO_DISASTER_OR_MAJOR_EVENTS"
+            else:
+                disaster_output = disaster_chain.invoke({
                     "events": "\n\n".join(all_items),
                     "country_name": country_name,
                     "date_display": date_display
                 })
+        print(holiday_output,disaster_output)
 
-                if filtered.strip().upper() == "NO_HIGH_RISK_EVENTS":
-                    st.info("No high-risk logistics disruptions or major holiday impact detected.")
-                else:
-                    # Step 2: Summarize to 2–3 lines
-                    short_summary = summary_chain.invoke({
-                        "filtered_events": filtered,
-                        "date_display": date_display,
-                        "country_name": country_name
-                    })
+        # --- SUMMARY_OUTPUT ---
+        summary_output = summary_chain.invoke({
+            "holiday_output": holiday_output,
+            "disaster_output": disaster_output,
+            "country_name": country_name,
+            "date_display": date_display
+        })
 
-                    st.subheader("High-Risk Alert")
-                    st.markdown(short_summary.strip())
+        st.subheader("ALERT")
+        st.markdown(summary_output.strip())
+    #             summary_output = f"""
+    # {holiday_output.strip()}
 
-            except Exception as e:
-                st.error(f"Report generation failed: {str(e)}")
-
-            
+    # {disaster_output.strip()}
+    # """
+    #             st.subheader("Alert")
+    #             st.markdown(summary_output.strip())
            
-           
+
+        
+
+
+               
+
+                   
+
+               
+       
