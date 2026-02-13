@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import requests
-import httpx
+#import httpx
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
@@ -105,7 +105,7 @@ HOLIDAY_LLM = ChatOpenAI(
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
-    client=httpx.Client(timeout=60.0)
+    #client=httpx.Client(timeout=60.0)
 )
 
 DISASTER_LLM = ChatOpenAI(
@@ -113,7 +113,7 @@ DISASTER_LLM = ChatOpenAI(
     temperature=0,
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
-    client=httpx.Client(timeout=60.0)
+    #client=httpx.Client(timeout=60.0)
 )
 
 SUMMARY_LLM = ChatOpenAI(
@@ -121,7 +121,7 @@ SUMMARY_LLM = ChatOpenAI(
     temperature=0.2,
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
-    client=httpx.Client(timeout=60.0)
+    #client=httpx.Client(timeout=60.0)
 )
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
