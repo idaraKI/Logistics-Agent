@@ -40,7 +40,9 @@ holiday_chain = PromptTemplate.from_template("""
 You are a public holiday database.
 Known holidays: {known_holidays}
 For {country_name} ({country_code}), period {date_start} to {date_end}:
-Return ONLY holidays in this format: YYYY-MM-DD | Holiday Name
+Return ONLY holidays, one per line, in this format:
+YYYY-MM-DD | Holiday Name
+Each holiday must be on its own separate line.
 If none, return: NO_PUBLIC_HOLIDAYS
 Do not guess or add explanations.
 """) | HOLIDAY_LLM | StrOutputParser()
