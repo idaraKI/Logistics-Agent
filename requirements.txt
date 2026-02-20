@@ -5,5 +5,8 @@ python-dotenv
 langchain
 langchain-openai
 langchain-core
-tavily-python
+feedparser
+fastapi
+uvicorn
+pydantic
 streamlit
