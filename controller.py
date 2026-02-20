@@ -222,11 +222,13 @@ def run_logistics_check(country_name, country_code, from_date_str, date_display,
     year = from_date_str.split("-")[0]
     holiday_list = fetch_holidays(country_code, year)
     holiday_text = "\n".join(holiday_list) or "NO_PUBLIC_HOLIDAYS"
+    base_date = datetime.strptime(from_date_str, "%Y-%m-%d").date()
+    lookahead = str(base_date + timedelta(days=7))
 
     holiday_output = holiday_chain.invoke({
         "country_name": country_name, "country_code": country_code.upper(),
         "date_start": from_date_str,
-        "date_end": date_display.split(" – ")[-1].strip() if " – " in date_display else from_date_str,
+        "date_end": lookahead,
         "known_holidays": holiday_text
     })
     logger.info("HOLIDAYS | Done")
