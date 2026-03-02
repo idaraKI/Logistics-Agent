@@ -102,5 +102,5 @@ if st.button("Run Logistics Check", type="primary",):
         )
 
         st.subheader("Alert")
-        st.markdown(result)
+        st.markdown(result.replace("\n", "  \n"))
    

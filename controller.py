@@ -40,27 +40,73 @@ holiday_chain = PromptTemplate.from_template("""
 You are a public holiday database.
 Known holidays: {known_holidays}
 For {country_name} ({country_code}), period {date_start} to {date_end}:
-Return ONLY holidays, one per line, in this format:
-YYYY-MM-DD | Holiday Name
-Each holiday must be on its own separate line.
-If none, return: NO_PUBLIC_HOLIDAYS
-Do not guess or add explanations.
+                                             
+Return the output in this exact format:
+Country: {country_name}
+CurrentTime: {current_time}
+Holidays:
+- Type: Holiday Name | Date: DD/MM/YYYY
+- Type: Holiday Name | Date: DD/MM/YYYY
+
+If no holidays, return:
+Country: {country_name}
+CurrentTime: {current_time}
+Holidays: None
+
+Do not add explanations. Only return the formatted line above.
 """) | HOLIDAY_LLM | StrOutputParser()
 
 disaster_chain = PromptTemplate.from_template("""
 You are a logistics disruption analyst.
 Country: {country_name} | Period: {date_display}
 Events below are real and recorded — report ALL of them.
-Format each as: SEVERITY | TYPE | Event name | Logistics impact | Date | Source
-If none, return: NO_DISRUPTION_EVENTS
+                                              
+Return the output in this exact format for each event:
+Country: {country_name}
+Date: DD/MM/YYYY
+Incident_Type: incident type here
+Severity: RED/ORANGE/GREEN/NEWS
+Current_Timestamp: {current_time}
+---
+If multiple events repeat the block above for each one.
+                                              
+If none, return:
+Country: {country_name}, Date: N/A, Incident_Type: NO_DISRUPTION_EVENTS, Severity: N/A, Current_Timestamp: {current_time}
+
+Severity scale:
+- RED: severe
+- ORANGE: moderate  
+- GREEN: minor
+- NEWS: from news source
 Events:
 {events}
 """) | DISASTER_LLM | StrOutputParser()
 
 summary_chain = PromptTemplate.from_template("""
 You are a logistics alert writer.
-Write 2-3 sentences. Be specific — include event names, dates, what is affected.
-Country: {country_name} | Period: {date_display}
+Using the data below, return the output in this exact format:
+
+Country: {country_name}
+Date: {current_date}
+Time: {current_time}
+Holidays:
+- Name: Holiday Name | Date: DD/MM/YYYY
+Next_Holiday: Name | Date: DD/MM/YYYY
+Active_Alerts:
+- Title: event title | Severity: RED/ORANGE/GREEN/NEWS | Summary: brief logistics impact | Source: GDACS/NEWSDATA
+
+If no holidays set:
+Holidays: None
+
+If no next holiday set:
+Next_Holiday: None
+
+If no active alerts set:
+Active_Alerts: None
+                                             
+Do not add explanations. Only return the formatted output above.
+
+                                             
 Data: {processed_input}
 """) | SUMMARY_LLM | StrOutputParser()
 
@@ -231,7 +277,8 @@ def run_logistics_check(country_name, country_code, from_date_str, date_display,
         "country_name": country_name, "country_code": country_code.upper(),
         "date_start": from_date_str,
         "date_end": lookahead,
-        "known_holidays": holiday_text
+        "known_holidays": holiday_text,
+        "current_time": datetime.now().strftime("%H:%M:%S")
     })
     logger.info("HOLIDAYS | Done")
 
@@ -250,13 +297,24 @@ def run_logistics_check(country_name, country_code, from_date_str, date_display,
     else:
         disaster_output = disaster_chain.invoke({
             "events": "\n\n".join(all_events),
-            "country_name": country_name, "date_display": date_display
+            "country_name": country_name, "date_display": date_display,
+            "current_time": datetime.now().strftime("%H:%M:%S")
         })
     logger.info("DISASTERS | Done")
 
+    # Add right before summary_chain.invoke(...)
+    print("HOLIDAY OUTPUT:")
+    print(holiday_output)
+    print("---")
+    print("DISASTER OUTPUT:")
+    print(disaster_output)
+    print("---")
+
     summary = summary_chain.invoke({
         "processed_input": f"=== HOLIDAYS ===\n{holiday_output}\n\n=== DISRUPTIONS ===\n{disaster_output}",
-        "country_name": country_name, "date_display": date_display
+        "country_name": country_name, "date_display": date_display,
+        "current_date": datetime.now().strftime("%d/%m/%Y"),
+        "current_time": datetime.now().strftime("%H:%M:%S")
     })
     logger.info(f"SUMMARY | Done — {len(summary)} chars")
 
