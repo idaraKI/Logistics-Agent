@@ -14,6 +14,7 @@ with st.sidebar:
 
     countries = [
         ("Mozambique", "moz"),
+        ("Iran", "ir"),
         ("Philippines", "phl"),
         ("South Africa", "zaf"),
         ("Kenya", "ke"),

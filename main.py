@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from datetime import datetime, date, timedelta
 from typing import Optional
 from dotenv import load_dotenv
-from controller import run_logistics_check, fetch_holidays, fetch_gdacs_rss, fetch_newsdata
+from controller import run_logistics_check, fetch_holidays, fetch_gdacs_rss, fetch_latest_news
 
 load_dotenv()
 
@@ -66,11 +66,20 @@ class DisasterRequest(BaseModel):
     from_date: date
     to_date: date
 
+class DisasterEvent(BaseModel):
+    Disaster_Type: str
+    Event_Summary: str
+    Logistics_Impact: str
+    Date: str
+    Severity: str
+    Source: str
+
 class DisasterResponse(BaseModel):
     Country: str
-    Date: str
-    Disaster_Type: str
-    Disaster_Summary: str
+    From_Date: str
+    To_Date: str
+    Total_Events: int
+    Events: list[DisasterEvent]
     Current_Timestamp: str
     status: str = "success"
 
@@ -131,7 +140,7 @@ async def check_logistics_risk(request: LogisticsRequest):
 
         return LogisticsResponse(
             Country=request.country_name,
-            Date=datetime.now().strftime("%d/%m/%Y"),
+            Date=datetime.strptime(request.from_date_str, "%Y-%m-%d").strftime("%d/%m/%Y"),
             Time=datetime.now().strftime("%H:%M:%S"),
             Holidays=holidays,
             Next_Holiday=next_holiday,
@@ -177,50 +186,111 @@ async def check_holidays(request: HolidayRequest):
 async def check_disasters(request: DisasterRequest):
     try:
         gdacs_events = fetch_gdacs_rss(request.country_code, request.from_date, request.to_date)
-        news_events  = fetch_newsdata(request.country_code, request.from_date, request.to_date)
-        all_events   = gdacs_events + news_events
-
-        # Take the first event as the primary disaster report
-        if all_events:
-            event = all_events[0]
-            lines = event.split("\n")
-
-            # Line 0: SOURCE:GDACS | ALERT:RED | TYPE:WF | Event Title
-            title_line = lines[0]
-            disaster_type    = title_line.split("TYPE:")[-1].split("|")[0].strip()
-            disaster_summary = title_line.split("|")[-1].strip()
-
-            # Line 1: Date: ... | Country: ...
-            date_line  = lines[1].strip() if len(lines) > 1 else ""
-            event_date = date_line.split("Date:")[-1].split("|")[0].strip() if "Date:" in date_line else "N/A"
+        news_events  = fetch_latest_news(request.country_code, request.from_date, request.to_date)
+        all_events   = gdacs_events + news_events 
 
             # Map short codes to full names
-            type_map = {
-                "WF":   "Wildfire",
-                "FL":   "Flood",
-                "EQ":   "Earthquake",
-                "TC":   "Tropical Cyclone",
-                "VO":   "Volcano",
-                "DR":   "Drought",
-                "NEWS": "News Event",
-            }
-            disaster_type = type_map.get(disaster_type, disaster_type)
+        type_map = {
+            "WF":   "Wildfire",
+            "FL":   "Flood",
+            "EQ":   "Earthquake",
+            "TC":   "Tropical Cyclone",
+            "VO":   "Volcano",
+            "DR":   "Drought",
+            "NEWS": "News Event",
+        }
+        if not all_events:
+            return DisasterResponse(
+                Country=request.country_code.upper(),
+                From_Date=str(request.from_date),
+                To_Date=str(request.to_date),
+                Total_Events=0,
+                Events=[],
+                Current_Timestamp=datetime.now().strftime("%H:%M:%S"),
+            )
 
-        else:
-            disaster_type    = "NO_DISRUPTION_EVENTS"
-            disaster_summary = "No disruption events found for this period."
-            event_date       = "N/A"
+        # Pass all events through disaster LLM to filter logistics-relevant ones
+        from controller import disaster_chain
+        filtered_output = disaster_chain.invoke({
+            "events":       "\n\n".join(all_events),
+            "country_name": request.country,
+            "date_display": f"{request.from_date} to {request.to_date}",
+            "current_time": datetime.now().strftime("%H:%M:%S")
+        })
+
+        print("RAW DISASTER LLM OUTPUT:")
+        print(filtered_output)
+        print("---END---")
+
+        parsed_events = []
+        current_event = {}
+
+        for line in filtered_output.splitlines():
+            line = line.strip()
+            if line.startswith("Country:"):
+               if current_event.get("type"):
+                  parsed_events.append(current_event)
+                  current_event = {}
+            elif line.startswith("Date:"):
+                 current_event["date"] = line.replace("Date:", "").strip()
+            elif line.startswith("Incident_Type:"):
+                 current_event["type"] = line.replace("Incident_Type:", "").strip()
+            elif line.lower().startswith  ("event_summary:"):
+                 current_event["event_summary"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Logistics_Impact:"):
+                 current_event["logistics_impact"] = line.replace("Logistics_Impact:", "").strip()
+            elif line.startswith("Severity:"):
+                 current_event["severity"] = line.replace("Severity:", "").strip()
+            elif line == "---":
+                 if current_event.get("type"):
+                    parsed_events.append(current_event)
+                 current_event = {}
+
+        if current_event.get("type"):
+           parsed_events.append(current_event)
+
+        # Catch last event
+        if current_event.get("type"):
+            parsed_events.append(current_event)
+
+        # Filter out NO_DISRUPTION_EVENTS
+        parsed_events = [e for e in parsed_events if e.get("type") != "NO_DISRUPTION_EVENTS"]
+
+        # ADD THIS — deduplicate by event_summary
+        seen = set()
+        unique_events = []
+        for e in parsed_events:
+            key = e.get("event_summary", "")
+            if key not in seen:
+               seen.add(key)
+               unique_events.append(e)
+        parsed_events = unique_events
+
+        events = [
+            DisasterEvent(
+                Disaster_Type=type_map.get(e.get("type", ""), e.get("type", "Unknown")),
+                Event_Summary=e.get("event_summary", "N/A"),
+                Logistics_Impact=e.get("logistics_impact", "N/A"),
+                Date=e.get("date", "N/A"),
+                Severity=e.get("severity", "N/A"),
+                Source="GDACS/GUARDIAN",
+    )
+    for e in parsed_events
+
+]
 
         return DisasterResponse(
             Country=request.country_code.upper(),
-            Date=event_date,
-            Disaster_Type=disaster_type,
-            Disaster_Summary=disaster_summary,
+            From_Date=str(request.from_date),
+            To_Date=str(request.to_date),
+            Total_Events=len(events),
+            Events=events,
             Current_Timestamp=datetime.now().strftime("%H:%M:%S"),
         )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 
 # --- Health check ---
 @app.get("/health")

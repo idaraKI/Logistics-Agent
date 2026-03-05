@@ -23,10 +23,13 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+GUARDIAN_API_KEY = os.getenv("GUARDIAN_API_KEY")
 if not OPENROUTER_API_KEY:
     raise ValueError("Missing OPENROUTER_API_KEY in .env file.")
 if not NEWSDATA_API_KEY:
     raise ValueError("Missing NEWSDATA_API_KEY in .env file.")
+if not GUARDIAN_API_KEY:
+    raise ValueError("Missing GUARDIAN_API_KEY in .env file.")
 
 
 # --- MODELS ---
@@ -59,27 +62,52 @@ Do not add explanations. Only return the formatted line above.
 disaster_chain = PromptTemplate.from_template("""
 You are a logistics disruption analyst.
 Country: {country_name} | Period: {date_display}
-Events below are real and recorded — report ALL of them.
+                                              
+Your job is to ONLY report events that DIRECTLY impact logistics operations.
+An event qualifies ONLY if it affects one or more of the following:
+- Road, rail, air or sea transport routes
+- Ports, airports, or border crossings
+- Warehouses or distribution centers
+- Supply chains or freight movement
+- Energy/fuel supply affecting transport
+- Security of cargo or drivers
+- Wildfires, floods, earthquakes or natural disasters near populated or industrial areas
+
+DO NOT report:
+- Political speeches, elections, or diplomatic meetings
+- Economic reports or financial news
+- Social issues unless they directly block transport
+- Military activity unless it disrupts a specific route or infrastructure
+- Any event where logistics impact is speculative or indirect
+
+Events:
+{events}
+
                                               
 Return the output in this exact format for each event:
 Country: {country_name}
 Date: DD/MM/YYYY
 Incident_Type: incident type here
+Event_summary: one or two sentences describing what happened     
+Logistics_Impact: one or two sentences describing the impact on logistics operations
 Severity: RED/ORANGE/GREEN/NEWS
 Current_Timestamp: {current_time}
 ---
 If multiple events repeat the block above for each one.
                                               
 If none, return:
-Country: {country_name}, Date: N/A, Incident_Type: NO_DISRUPTION_EVENTS, Severity: N/A, Current_Timestamp: {current_time}
+Country: {country_name}
+Date: N/A
+Incident_Type: NO_DISRUPTION_EVENTS
+Severity: N/A
+Current_Timestamp: {current_time}
 
 Severity scale:
 - RED: severe
 - ORANGE: moderate  
 - GREEN: minor
 - NEWS: from news source
-Events:
-{events}
+
 """) | DISASTER_LLM | StrOutputParser()
 
 summary_chain = PromptTemplate.from_template("""
@@ -93,7 +121,7 @@ Holidays:
 - Name: Holiday Name | Date: DD/MM/YYYY
 Next_Holiday: Name | Date: DD/MM/YYYY
 Active_Alerts:
-- Title: event title | Severity: RED/ORANGE/GREEN/NEWS | Summary: brief logistics impact | Source: GDACS/NEWSDATA
+- Title: event title | Severity: RED/ORANGE/GREEN/NEWS | Summary: brief logistics impact | Source: GDACS/GUARDIAN/EONET
 
 If no holidays set:
 Holidays: None
@@ -176,8 +204,7 @@ def fetch_gdacs_rss(country_code, from_date, to_date):
             if not (from_date <= event_date <= to_date):
                 continue
         except Exception:
-            pass  # include if date unparseable
-
+            continue  # skip events with unparseable dates
         events.append(
             f"SOURCE:GDACS | ALERT:{g('alertlevel','gdacs').upper()} | TYPE:{g('eventtype','gdacs').upper()} | {title}\n"
             f"  Date: {fromdate_str} | Country: {country}\n"
@@ -189,53 +216,58 @@ def fetch_gdacs_rss(country_code, from_date, to_date):
     return events
 
 
-# --- NEWSDATA API — news-based disaster & disruption coverage ---
-def fetch_newsdata(country_code, from_date, to_date):
+# --- GAURDIAN API ---
+def fetch_latest_news(country_code, from_date, to_date):
     from_date, to_date = expand(from_date, to_date)
-    iso2 = to_iso2(country_code).lower()
-    logger.info(f"NEWSDATA | {iso2} | {from_date} to {to_date}")
+    logger.debug(f"GUARDIAN | Searching {from_date} to {to_date}")
+    logger.info(f"GUARDIAN | {country_code} | {from_date} to {to_date}")
 
-    # Search for logistics-relevant disaster/disruption news
-    query = "flood OR cyclone OR earthquake OR volcano OR wildfire OR drought OR strike OR protest OR disaster"
+    c = _resolve(country_code)
+    country_name = getattr(c, "common_name", None) or getattr(c, "name", None) or country_code
+
+    query = f"{country_name} (disaster OR attack OR flood OR earthquake OR bombing OR conflict OR drought OR wildfire)"
 
     try:
-        r = requests.get(
-            "https://newsdata.io/api/1/news",
+        response = requests.get(
+            "https://content.guardianapis.com/search",
             params={
-                "apikey":   NEWSDATA_API_KEY,
-                "country":  iso2,
-                "q":        query,
-                "language": "en",
-                "from_date": str(from_date),
-                "to_date":   str(to_date),
+                "q":          query,
+                "from-date":  str(from_date),
+                "to-date":    str(to_date),
+                "lang":       "en",
+                "page-size":  25,
+                "api-key":    GUARDIAN_API_KEY,
             },
             timeout=20
         )
-        r.raise_for_status()
+        response.raise_for_status()
+        data = response.json()
     except Exception as e:
-        logger.error(f"NEWSDATA | Failed: {e}")
+        logger.error(f"GUARDIAN | Failed: {e}")
         return []
 
-    data    = r.json()
-    results = data.get("results", [])
-    logger.info(f"NEWSDATA | {len(results)} articles received")
+    articles = data.get("response", {}).get("results", [])
+    logger.info(f"GUARDIAN | {len(articles)} articles received")
 
     events = []
-    for article in results:
-        title       = article.get("title") or "No title"
-        description = (article.get("description") or "")[:200]
-        pub_date    = (article.get("pubDate") or "")[:10]
-        source      = article.get("source_id") or "unknown"
-        link        = article.get("link") or ""
+    for article in articles:
+        title    = article.get("webTitle") or "No title"
+        url      = article.get("webUrl") or ""
+        source   = "The Guardian"
+        pub_date = (article.get("webPublicationDate") or "")[:10]
+
+        # Only include articles that mention the country name in the title
+        if country_name.lower() not in title.lower():
+            continue
 
         events.append(
-            f"SOURCE:NEWSDATA | ALERT:NEWS | TYPE:NEWS | {title}\n"
+            f"SOURCE:GUARDIAN | ALERT:NEWS | TYPE:NEWS | {title}\n"
             f"  Date: {pub_date} | Source: {source}\n"
-            f"  Details: {description}\n"
-            f"  Link: {link}"
+            f"  Details: {title}\n"
+            f"  Link: {url}"
         )
 
-    logger.info(f"NEWSDATA | {len(events)} articles formatted")
+    logger.info(f"GUARDIAN | {len(events)} events formatted")
     return events
 
 
@@ -289,8 +321,10 @@ def run_logistics_check(country_name, country_code, from_date_str, date_display,
     fd = selected_date if date_mode == "Single date" else start_date
     td = selected_date if date_mode == "Single date" else end_date
 
-    all_events = fetch_gdacs_rss(country_code, fd, td) + fetch_newsdata(country_code, fd, td)
-    logger.info(f"RUN | {len(all_events)} total events from all sources")
+    all_events = (
+    fetch_gdacs_rss(country_code, fd, td) +
+    fetch_latest_news(country_code, fd, td)  
+)
 
     if not all_events:
         disaster_output = "NO_DISRUPTION_EVENTS"
@@ -319,3 +353,4 @@ def run_logistics_check(country_name, country_code, from_date_str, date_display,
     logger.info(f"SUMMARY | Done — {len(summary)} chars")
 
     return summary.strip()
+  
