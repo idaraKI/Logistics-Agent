@@ -15,19 +15,16 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('data_log.log', mode='a', encoding='utf-8')
+        logging.FileHandler('data_log.log', mode='w', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
 GUARDIAN_API_KEY = os.getenv("GUARDIAN_API_KEY")
 if not OPENROUTER_API_KEY:
     raise ValueError("Missing OPENROUTER_API_KEY in .env file.")
-if not NEWSDATA_API_KEY:
-    raise ValueError("Missing NEWSDATA_API_KEY in .env file.")
 if not GUARDIAN_API_KEY:
     raise ValueError("Missing GUARDIAN_API_KEY in .env file.")
 

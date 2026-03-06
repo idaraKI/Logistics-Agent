@@ -1,17 +1,22 @@
+import os
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, date, timedelta
 from typing import Optional
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pycountry
 from dotenv import load_dotenv
 from controller import run_logistics_check, fetch_holidays, fetch_gdacs_rss, fetch_latest_news
 
 load_dotenv()
 
-app = FastAPI(
-    title="Logistics Disruption Monitor API",
-    description="API for monitoring logistics risks, holidays, and disasters",
-    version="1.0.0"
-)
+logger = logging.getLogger(__name__)
+
+ALERT_COUNTRIES  = os.getenv("ALERT_COUNTRIES", "ir").split(",")
+
 
 # --- Request / Response Models ---
 class LogisticsRequest(BaseModel):
@@ -82,6 +87,86 @@ class DisasterResponse(BaseModel):
     Events: list[DisasterEvent]
     Current_Timestamp: str
     status: str = "success"
+
+# --- Build message ---
+def build_message(country_code, check_date, llm_output):
+    lines = [
+        f" *Logistics Daily Alert*",
+        f"Country: {country_code.upper()}",
+        f"Date: {check_date.strftime('%d/%m/%Y')}",
+        f"Time: {datetime.now().strftime('%H:%M:%S')}",
+        f"",
+    ]
+    if "NO_DISRUPTION_EVENTS" in llm_output:
+        lines.append(" No logistics disruption events found for today.")
+    else:
+        lines.append("Active Alerts:")
+        lines.append(llm_output)
+    return "\n".join(lines)
+
+
+# --- Daily check ---
+def run_daily_check():
+    logger.info("SCHEDULER | Running daily logistics check")
+    today = date.today()
+
+    for country_code in ALERT_COUNTRIES:
+        country_code = country_code.strip()
+        logger.info(f"SCHEDULER | Checking {country_code}")
+
+        try:
+            import pycountry
+            c = pycountry.countries.get(alpha_2=country_code.upper())
+            country_name = getattr(c, "common_name", None) or getattr(c, "name", None) or country_code
+
+            result = run_logistics_check(
+                country_name=country_name,
+                country_code=country_code,
+                from_date_str=str(today),
+                date_display=today.strftime("%d/%m/%Y"),
+                date_mode="Single date",
+                selected_date=today,
+                start_date=today,
+                end_date=today
+            )
+
+            message = build_message(country_code, today, result)
+            logger.info(f"SCHEDULER | Alert for {country_code.upper()}:\n{message}")
+
+
+        except Exception as e:
+            logger.error(f"SCHEDULER | Failed for {country_code}: {e}")
+
+# --- Scheduler ---
+def start_scheduler():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(
+        run_daily_check,
+        trigger=CronTrigger(hour=7, minute=0),
+        id="daily_logistics_check",
+        name="Daily Logistics Check",
+        replace_existing=True
+    )
+    scheduler.start()
+    logger.info("SCHEDULER | Started — daily check at 07:00 AM")
+    return scheduler
+
+
+# --- Lifespan ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler = start_scheduler()
+    yield
+    scheduler.shutdown(wait=False)
+
+
+# --- App ---
+app = FastAPI(
+    title="Logistics Disruption Monitor API",
+    description="API for monitoring logistics risks, holidays, and disasters",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # --- Endpoint 1 (Full Logistics Check)---
 @app.post("/check", response_model=LogisticsResponse)
@@ -290,7 +375,16 @@ async def check_disasters(request: DisasterRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+# --- Trigger alert manually ---
+@app.post("/trigger-alert")
+async def trigger_alert():
+    try:
+        run_daily_check()
+        return {"status": "success", "message": "Daily check triggered manually"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Health check ---
 @app.get("/health")
